@@ -17,65 +17,48 @@ jobs:
       - name: Checkout kernel source
         run: |
           git clone --depth=1 --branch R https://github.com/${{ github.repository }} kernel
-          echo "kernel source cloned"
+          echo "✅ kernel cloned"
 
-      - name: Checkout KernelSU  
+      - name: Checkout KernelSU
         run: |
-          cd ${{ github.workspace }}/kernel
-          git clone --depth=1 --branch ${{ inputs.kernelsu_version }} https://github.com/tiann/KernelSU KernelSU
-          echo "KernelSU cloned"
+          git clone --depth=1 --branch ${{ inputs.kernelsu_version }} https://github.com/tiann/KernelSU kernel/KernelSU
+          echo "✅ KernelSU cloned"
 
-      - name: Install dependencies
+      - name: Install all dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq git ccache flex bison \
-            libncurses5-dev libssl-dev libelf-dev bc cpio \
-            kmod rsync unzip gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
-
-      - name: Download Clang 14
-        run: |
-          mkdir -p $GITHUB_WORKSPACE/toolchain
-          cd $GITHUB_WORKSPACE/toolchain
-          wget -q https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.6/clang+llvm-14.0.6-x86_64-linux-gnu-ubuntu-18.04.tar.xz
-          tar -xf clang+llvm-14.0.6-x86_64-linux-gnu-ubuntu-18.04.tar.xz
-          mv clang+llvm-14.0.6-x86_64-linux-gnu-ubuntu-18.04 clang
-          echo "Clang 14 ready"
+          sudo apt-get update -qq && sudo apt-get install -y -qq \
+            git ccache python3 flex bison libncurses5-dev \
+            libssl-dev libelf-dev bc cpio kmod rsync unzip zip \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            clang-14 lld-14 llvm-14
 
       - name: Integrate KernelSU
         run: |
-          cd $GITHUB_WORKSPACE/kernel
+          cd kernel
           echo "obj-y += KernelSU/" >> Makefile
-          if [ -f KernelSU/kernel/setup.sh ]; then
-            cd KernelSU/kernel && chmod +x setup.sh && ./setup.sh && cd ../..
-          fi
-          echo "KernelSU integrated"
+          [ -f KernelSU/kernel/setup.sh ] && cd KernelSU/kernel && chmod +x setup.sh && ./setup.sh && cd ../..
+          echo "✅ KernelSU integrated"
 
       - name: Configure kernel
         run: |
-          cd $GITHUB_WORKSPACE/kernel
-          export PATH=$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH
-          export ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
-          make O=out ARCH=arm64 evergo_defconfig
+          cd kernel
+          make O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- evergo_defconfig
+          echo "✅ evergo_defconfig done"
 
       - name: Build kernel
         run: |
-          cd $GITHUB_WORKSPACE/kernel
-          export PATH=$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH
-          export ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang CLANG_TRIPLE=aarch64-linux-gnu-
-          make -j$(nproc) O=out ARCH=arm64 \
-            CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- 2>&1 | tee build.log
+          cd kernel
+          make -j$(nproc) O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
+            2>&1 | tee build.log
+          echo "✅ Build complete!"
 
-      - name: Upload artifact
-        run: |
-          mkdir -p $GITHUB_WORKSPACE/output
-          cp $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/Image.gz-dtb $GITHUB_WORKSPACE/output/ 2>/dev/null || \
-          cp $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/Image.gz $GITHUB_WORKSPACE/output/ 2>/dev/null || \
-          cp $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/Image $GITHUB_WORKSPACE/output/ 2>/dev/null || true
-
-      - name: Upload to artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: evergo-kernelsu-boot
-          path: $GITHUB_WORKSPACE/output/
+          name: evergo-kernelsu-boot-${{ inputs.kernelsu_version }}
+          path: |
+            kernel/out/arch/arm64/boot/Image.gz-dtb
+            kernel/out/arch/arm64/boot/Image.gz
+            kernel/out/arch/arm64/boot/Image
+            kernel/build.log
           if-no-files-found: warn
