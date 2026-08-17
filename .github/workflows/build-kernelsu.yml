@@ -1,0 +1,95 @@
+name: Build KernelSU for evergo
+on:
+  workflow_dispatch:
+    inputs:
+      kernelsu_version:
+        description: 'KernelSU version (tag)'
+        required: true
+        default: 'v1.0.2'
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          repository: Xiaomi-MT6833/kernel_xiaomi_evergo
+          ref: master
+          path: kernel
+
+      - name: Checkout KernelSU
+        uses: actions/checkout@v4
+        with:
+          repository: tiann/KernelSU
+          ref: ${{ inputs.kernelsu_version }}
+          path: kernel/KernelSU
+
+      - name: Setup build environment
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            git ccache python3 python3-pip \
+            flex bison libncurses5-dev \
+            libssl-dev libelf-dev bc cpio \
+            kmod xmlto rsync
+          sudo pip3 install -q google-crc32c
+
+      - name: Download Clang toolchain
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/toolchain
+          cd $GITHUB_WORKSPACE/toolchain
+          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r487747.tar.gz -O clang.tar.gz
+          tar -xf clang.tar.gz
+          rm clang.tar.gz
+
+      - name: Download GCC toolchain
+        run: |
+          cd $GITHUB_WORKSPACE/toolchain
+          git clone -q --depth=1 \
+            https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 \
+            gcc
+
+      - name: Apply KernelSU patch
+        run: |
+          cd $GITHUB_WORKSPACE/kernel
+          # 对于非GKI内核，使用KernelSU的kprobe模式
+          ln -sf ../KernelSU KernelSU
+          echo "obj-y += KernelSU/" >> Makefile
+
+      - name: Build kernel
+        run: |
+          cd $GITHUB_WORKSPACE/kernel
+          export PATH=$GITHUB_WORKSPACE/toolchain:$GITHUB_WORKSPACE/toolchain/gcc/bin:$PATH
+          export ARCH=arm64
+          export SUBARCH=arm64
+          
+          # MT6833 evergo 默认配置
+          make O=out evergo_defconfig
+          
+          # 编译
+          make -j$(nproc) O=out \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            2>&1 | tee build.log
+
+      - name: Package boot.img
+        run: |
+          cd $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot
+          # 内核映像
+          ls -la Image.gz-dtb Image.gz Image 2>/dev/null || true
+          
+          # 使用 AIK 打包 boot.img
+          mkdir -p $GITHUB_WORKSPACE/boot-img
+          cp Image.gz-dtb $GITHUB_WORKSPACE/boot-img/ 2>/dev/null || \
+          cp Image.gz $GITHUB_WORKSPACE/boot-img/ 2>/dev/null || \
+          cp Image $GITHUB_WORKSPACE/boot-img/
+
+      - name: Upload boot.img
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernelSU-boot-evergo
+          path: ${{ github.workspace }}/boot-img/
+          if-no-files-found: error
