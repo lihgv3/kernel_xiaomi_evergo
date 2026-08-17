@@ -1,0 +1,43 @@
+name: Build KernelSU
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu flex bison libncurses5-dev libssl-dev libelf-dev bc cpio kmod
+
+      - name: KernelSU + Fix defconfig
+        run: |
+          # Clone KernelSU
+          git clone --depth=1 https://github.com/tiann/KernelSU
+          echo "obj-y += KernelSU/" >> Makefile
+
+          # 关闭有bug的内联加密功能 (ksm_flock函数体缺失)
+          sed -i 's/CONFIG_BLK_INLINE_ENCRYPTION=y/# CONFIG_BLK_INLINE_ENCRYPTION is not set/' arch/arm64/configs/evergo_defconfig
+
+          # 为KernelSU启用kprobes
+          echo "CONFIG_KPROBES=y" >> arch/arm64/configs/evergo_defconfig
+
+          echo "✅ defconfig fixed"
+
+      - name: Config
+        run: |
+          export ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- evergo_defconfig
+
+      - name: Build
+        run: |
+          export ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
+          make -j$(nproc) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- 2>&1 | tee build.log
+          echo "✅ Build complete"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: evergo-kernelsu
+          path: out/arch/arm64/boot/
