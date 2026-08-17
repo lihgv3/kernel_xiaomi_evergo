@@ -1,4 +1,4 @@
-name: 🔥 Build KernelSU for Redmi Note 11 5G (evergo)
+name: 🔥 Build KernelSU for evergo (GCC)
 run-name: KernelSU ${{ inputs.kernelsu_version }} for evergo
 
 on:
@@ -24,41 +24,43 @@ jobs:
           git clone --depth=1 --branch ${{ inputs.kernelsu_version }} https://github.com/tiann/KernelSU kernel/KernelSU
           echo "✅ KernelSU cloned"
 
-      - name: Install all dependencies
+      - name: Install dependencies
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq \
-            git ccache python3 flex bison libncurses5-dev \
-            libssl-dev libelf-dev bc cpio kmod rsync unzip zip \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
-            clang-14 lld-14 llvm-14
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            flex bison libncurses5-dev libssl-dev libelf-dev \
+            bc cpio kmod rsync unzip zip ccache python3 \
+            gcc-aarch64-linux-gnu
 
       - name: Integrate KernelSU
         run: |
           cd kernel
           echo "obj-y += KernelSU/" >> Makefile
-          [ -f KernelSU/kernel/setup.sh ] && cd KernelSU/kernel && chmod +x setup.sh && ./setup.sh && cd ../..
-          echo "✅ KernelSU integrated"
+          # 为MTK 4.14内核启用KPROBES
+          echo "CONFIG_KPROBES=y" >> arch/arm64/configs/evergo_defconfig
+          echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm64/configs/evergo_defconfig
+          echo "✅ KernelSU integrated (kprobes enabled)"
 
       - name: Configure kernel
         run: |
           cd kernel
-          make O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- evergo_defconfig
-          echo "✅ evergo_defconfig done"
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- evergo_defconfig
+          echo "✅ defconfig done"
 
       - name: Build kernel
         run: |
           cd kernel
-          make -j$(nproc) O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
-            2>&1 | tee build.log
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          make -j$(nproc) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- 2>&1 | tee build.log
           echo "✅ Build complete!"
 
-      - name: Upload artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: evergo-kernelsu-boot-${{ inputs.kernelsu_version }}
+          name: evergo-kernelsu-boot-v${{ inputs.kernelsu_version }}
           path: |
-            kernel/out/arch/arm64/boot/Image.gz-dtb
-            kernel/out/arch/arm64/boot/Image.gz
-            kernel/out/arch/arm64/boot/Image
-            kernel/build.log
+            kernel/out/arch/arm64/boot/
           if-no-files-found: warn
