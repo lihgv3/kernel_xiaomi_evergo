@@ -1,0 +1,82 @@
+
+---
+
+name: 🔥 Build KernelSU for Redmi Note 11 5G (evergo)
+run-name: KernelSU ${{ inputs.kernelsu_version }} for evergo
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernelsu_version:
+        description: 'KernelSU版本'
+        required: true
+        default: 'v1.0.2'
+        type: string
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          repository: Xiaomi-MT6833/kernel_xiaomi_evergo
+          ref: R
+          path: kernel
+
+      - name: Checkout KernelSU
+        uses: actions/checkout@v4
+        with:
+          repository: tiann/KernelSU
+          ref: ${{ inputs.kernelsu_version }}
+          path: kernel/KernelSU
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git ccache python3 flex bison \
+            libncurses5-dev libssl-dev libelf-dev bc cpio kmod \
+            rsync unzip gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
+      - name: Download Clang 14
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/toolchain
+          cd $GITHUB_WORKSPACE/toolchain
+          wget -q https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.6/clang+llvm-14.0.6-x86_64-linux-gnu-ubuntu-18.04.tar.xz
+          tar -xf clang+llvm-14.0.6-x86_64-linux-gnu-ubuntu-18.04.tar.xz
+          mv clang+llvm-14.0.6-x86_64-linux-gnu-ubuntu-18.04 clang
+
+      - name: Apply KernelSU patch
+        run: |
+          cd $GITHUB_WORKSPACE/kernel
+          ls -la KernelSU/
+          if [ -f KernelSU/kernel/setup.sh ]; then
+            cd KernelSU/kernel && chmod +x setup.sh && ./setup.sh && cd ../..
+          fi
+          echo "obj-y += KernelSU/" >> Makefile
+          echo "✅ KernelSU patched"
+
+      - name: Build kernel
+        run: |
+          cd $GITHUB_WORKSPACE/kernel
+          export PATH=$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH
+          export ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
+          make O=out ARCH=arm64 evergo_defconfig
+          make -j$(nproc) O=out ARCH=arm64 CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- 2>&1 | tee build.log
+
+      - name: Upload boot.img
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/output
+          cp $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/Image.gz-dtb $GITHUB_WORKSPACE/output/ 2>/dev/null || \
+          cp $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/Image.gz $GITHUB_WORKSPACE/output/ 2>/dev/null || \
+          cp $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/Image $GITHUB_WORKSPACE/output/ 2>/dev/null || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: evergo-kernelsu-boot
+          path: $GITHUB_WORKSPACE/output/
+
+---
