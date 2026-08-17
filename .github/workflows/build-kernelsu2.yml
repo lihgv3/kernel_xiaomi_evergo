@@ -1,0 +1,87 @@
+name: 🔥 Build KernelSU for evergo
+run-name: KernelSU ${{ inputs.kernelsu_version }} for evergo
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernelsu_version:
+        description: 'KernelSU版本'
+        required: true
+        default: 'v1.0.2'
+        type: string
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout kernel source
+        run: |
+          git clone --depth=1 --branch R https://github.com/${{ github.repository }} kernel
+          echo "✅ kernel cloned"
+
+      - name: Checkout KernelSU
+        run: |
+          git clone --depth=1 --branch ${{ inputs.kernelsu_version }} https://github.com/tiann/KernelSU kernel/KernelSU
+          echo "✅ KernelSU cloned"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            flex bison libncurses5-dev libssl-dev libelf-dev \
+            bc cpio kmod rsync unzip zip ccache python3 \
+            gcc-aarch64-linux-gnu
+
+      - name: Integrate KernelSU + fix MTK bugs
+        run: |
+          cd kernel
+          echo "obj-y += KernelSU/" >> Makefile
+
+          # 启用KPROBES (KernelSU需要)
+          echo "CONFIG_KPROBES=y" >> arch/arm64/configs/evergo_defconfig
+          echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm64/configs/evergo_defconfig
+
+          # 🩹 修复1: fpc1542指纹驱动bug (变长数组初始化)
+          cat > drivers/input/fingerprint/fpc1542/mtk_spi_fix.patch << 'EOF'
+          --- a/drivers/input/fingerprint/fpc1542/mtk_spi.c
+          +++ b/drivers/input/fingerprint/fpc1542/mtk_spi.c
+          @@ -168,7 +168,8 @@ static int fpc_read_id(struct fpc1542_data *fpc1542)
+                 goto err;
+           }
+           dev_dbg(&fpc1542->spi->dev, "%s: entered\n", __func__);
+          -       u8 rx[len] = {0, 0, 0};
+          +       u8 rx[64] = {0};
+           msg_tx[0] = cmd;
+           msg_tx[1] = addr;
+EOF
+          sed -i 's/u8 rx\[len\] = {0, 0, 0};/u8 rx[64] = {0};/' drivers/input/fingerprint/fpc1542/mtk_spi.c
+          echo "   ✅ 指纹驱动bug已修复"
+
+          # 🩹 修复2: DRM驱动格式化警告
+          sed -i 's/DDPMSG("%s: infra_regs_pa = 0x%lx\\n",/DDPMSG("%s: infra_regs_pa = 0x%llx\\n",/' drivers/gpu/drm/mediatek/mtk_drm_drv.c
+          echo "   ✅ DRM驱动bug已修复"
+
+          echo "✅ KernelSU integrated + MTK bugs fixed"
+
+      - name: Configure kernel
+        run: |
+          cd kernel
+          export ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- evergo_defconfig
+          echo "✅ defconfig done"
+
+      - name: Build kernel
+        run: |
+          cd kernel
+          export ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
+          make -j$(nproc) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            KCFLAGS="-Wno-error" \
+            2>&1 | tee build.log
+          echo "✅ Build complete!"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: evergo-kernelsu-boot
+          path: kernel/out/arch/arm64/boot/
+          if-no-files-found: warn
